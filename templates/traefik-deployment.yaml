@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "laravel-app.fullname" . }}-traefik
+  labels:
+    {{- include "laravel-app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: traefik
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "laravel-app.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: traefik
+  template:
+    metadata:
+      labels:
+        {{- include "laravel-app.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: traefik
+    spec:
+      serviceAccountName: {{ include "laravel-app.fullname" . }}-traefik
+      containers:
+      - name: traefik
+        image: "{{ .Values.traefik.image.repository }}:{{ .Values.traefik.image.tag }}"
+        imagePullPolicy: {{ .Values.traefik.image.pullPolicy }}
+        ports:
+        - name: web
+          containerPort: 80
+          protocol: TCP
+        - name: websecure
+          containerPort: 443
+          protocol: TCP
+        - name: dashboard
+          containerPort: 8080
+          protocol: TCP
+        volumeMounts:
+        - name: traefik-config
+          mountPath: /etc/traefik
+        - name: acme-storage
+          mountPath: /data
+        args:
+        - --api.insecure=false
+        - --api.dashboard=true
+        - --entrypoints.web.address=:80
+        - --entrypoints.websecure.address=:443
+        {{- if .Values.traefik.letsencrypt.enabled }}
+        - --certificatesresolvers.letsencrypt.acme.email={{ .Values.traefik.letsencrypt.email }}
+        - --certificatesresolvers.letsencrypt.acme.storage={{ .Values.traefik.letsencrypt.storage }}
+        {{- if .Values.traefik.letsencrypt.staging }}
+        - --certificatesresolvers.letsencrypt.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
+        {{- else }}
+        - --certificatesresolvers.letsencrypt.acme.caserver=https://acme-v02.api.letsencrypt.org/directory
+        {{- end }}
+        - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+        {{- end }}
+        - --providers.kubernetescrd
+        - --providers.kubernetescrd.ingressclass=traefik
+        - --entrypoints.web.http.redirections.entrypoint.to=websecure
+        - --entrypoints.web.http.redirections.entrypoint.scheme=https
+        livenessProbe:
+          httpGet:
+            path: /ping
+            port: dashboard
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ping
+            port: dashboard
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          {{- toYaml .Values.traefik.resources | nindent 12 }}
+      volumes:
+      - name: traefik-config
+        configMap:
+          name: {{ include "laravel-app.fullname" . }}-traefik-config
+      - name: acme-storage
+        persistentVolumeClaim:
+          claimName: {{ include "laravel-app.fullname" . }}-traefik-acme-pvc
